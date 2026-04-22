@@ -1,0 +1,29 @@
+{
+  "1": {
+    "status": "STOPPED",
+    "name": "",
+    "ip": "",
+    "pass": "",
+    "update": "",
+    "rconhost": "",
+    "rconPort": "",
+    "rconpass": ""
+  },
+  "2": {
+    "status": "STOPPED",
+    "name": "",
+    "ip": "",
+    "pass": "",
+    "update": "",
+    "rconhost": "",
+    "rconPort": "",
+    "rconpass": ""
+  },
+  "_meta": {
+    "messages": {
+      "live_list": "",
+      "live_status": "",
+      "main_menu": ""
+    }
+  }
+}

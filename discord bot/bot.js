@@ -212,7 +212,7 @@ function syncSelectedServerFromStatusData(statusData) {
     const currentStatus = hasValidSelected ? getStatusValue(statusData[currentSelected]) : 'INCONNU';
     const currentIsActive = hasValidSelected && currentStatus === 'STARTED';
 
-    // 1) si le serveur sélectionné n'existe plus
+    // 1) if the selected server no longer exists
     if (currentSelected && !servers.includes(currentSelected)) {
         if (activeIds.length > 0) {
             lastSelectedServerId = activeIds[0];
@@ -226,7 +226,7 @@ function syncSelectedServerFromStatusData(statusData) {
         return;
     }
 
-    // 2) si aucun serveur actif selon WGSM
+    // 2) if all server offline according to WGSM
     if (activeIds.length === 0) {
         lastSelectedServerId = null;
         lastSelectedServerWasActive = false;
@@ -234,10 +234,10 @@ function syncSelectedServerFromStatusData(statusData) {
         return;
     }
 
-    // 3) si l'utilisateur a déjà une sélection valide
+    // 3) if the user already has a valid selection
     if (hasValidSelected) {
-        // si le serveur sélectionné vient réellement de passer STOPPED,
-        // on bascule vers le premier actif
+        // if the selected server has actually just switched to STOPPED,
+        // We switch to the first asset
         if (currentStatus === 'STOPPED' && lastSelectedServerWasActive) {
             lastSelectedServerId = activeIds[0];
             lastSelectedServerWasActive = true;
@@ -245,13 +245,13 @@ function syncSelectedServerFromStatusData(statusData) {
             return;
         }
 
-        // sinon on garde TOUJOURS la sélection manuelle
+        // otherwise we ALWAYS keep the manual selection
         lastSelectedServerWasActive = currentIsActive;
         logDebug('KEEP SELECTED SERVER ->', currentSelected, '| status =', currentStatus);
         return;
     }
 
-    // 4) aucune sélection valable -> prendre le premier actif
+    // 4) No valid selection -> take the first asset
     lastSelectedServerId = activeIds[0];
     lastSelectedServerWasActive = true;
     logDebug('NO VALID SELECTED -> sync to', lastSelectedServerId);
@@ -521,7 +521,7 @@ async function upsertStatusMessage(channel, key, text) {
     try {
         const savedMessageId = getStatusMessageId(key);
 
-        // ✅ skip si même texte
+        // ✅ Skip if same text
         if (lastStatusTextByKey[key] === text) {
             logDebug('UPSERT STATUS MESSAGE SKIP SAME TEXT', key);
             return null;
@@ -535,7 +535,7 @@ async function upsertStatusMessage(channel, key, text) {
                 if (oldMsg) {
                     await oldMsg.edit({ content: text }).catch(() => { });
 
-                    // ✅ après EDIT réussi
+                    // ✅ after successful EDIT
                     lastStatusTextByKey[key] = text;
 
                     logDebug('UPSERT EDIT OK', key, oldMsg.id);
@@ -552,7 +552,7 @@ async function upsertStatusMessage(channel, key, text) {
         if (newMsg) {
             setStatusMessageId(key, newMsg.id);
 
-            // ✅ après SEND réussi
+            // ✅ after successful SEND
             lastStatusTextByKey[key] = text;
 
             logDebug('UPSERT SEND OK', key, newMsg.id);
@@ -598,7 +598,7 @@ function buildInterface(selectedId = null) {
     if (availableServers.length > 0) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId('select_server')
-            .setPlaceholder('Choisir un serveur')
+            .setPlaceholder('Choose a serveur')
             .addOptions(
                 availableServers.map(s => ({
                     label: s.name,
@@ -780,7 +780,7 @@ async function updateMenuStatus(serverId = null) {
         const components = buildInterface(selected);
 
         const signature = JSON.stringify({
-            content: 'Gestion serveur',
+            content: 'serveur list',
             selected,
             components: components.map(row => ({
                 components: row.components.map(c => ({
@@ -810,7 +810,7 @@ async function updateMenuStatus(serverId = null) {
         }
 
         await menuMessage.edit({
-            content: 'Gestion serveur',
+            content: 'serveur list',
             components
         }).catch(err => {
             logDebug('UPDATE MENU STATUS EDIT FAIL', err?.message || err);
@@ -883,7 +883,7 @@ async function executePendingPowerAction() {
             await upsertStatusMessage(
                 channel,
                 'live_status',
-                `${action.summaryText} | ${action.type === 'shutdown' ? 'arrêt' : 'redémarrage'} dans 4 min`
+                `${action.summaryText} | ${action.type === 'shutdown' ? 'stop' : 'restart'} in 4 min`
             );
         }
 
@@ -935,7 +935,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
 
     try {
         await interaction.message.edit({
-            content: 'Gestion serveur',
+            content: 'server list',
             components: buildInterface(lastSelectedServerId)
         });
     } catch (err) {
@@ -945,7 +945,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
     await upsertStatusMessage(
         interaction.channel,
         'live_status',
-        `⏳ ${targetAction.toUpperCase()} en cours...`
+        `⏳ ${targetAction.toUpperCase()} in progress...`
     );
 
     const wgsmStartedIds = await getLatestStartedIdsFromWgsm(interaction.channel);
@@ -965,7 +965,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         ok: [],
         fail: [],
         off: [],
-        summary: '💾 OK:- | FAIL:- | SERVEUR ETEINT:-'
+        summary: '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
     };
 
     if (startedRconIds.length > 0) {
@@ -979,7 +979,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            '💾 OK:- | FAIL:- | SERVEUR ETEINT:-'
+            '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
         );
     }
 
@@ -999,11 +999,11 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            `${rconResult.summary} | ${targetAction.toUpperCase()} ANNULÉ`
+            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED`
         );
 
         await interaction.message.edit({
-            content: 'Gestion serveur',
+            content: 'server list',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after canceled power action :', err);
@@ -1019,7 +1019,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         summaryText: rconResult.summary
     };
 
-    // ✅ SI AUCUN SERVEUR ACTIF, on ne dépend pas de WGSM stopall
+    // ✅ If all servers are offline, we do not depend on WGSM stopall
     if (wgsmStartedIds.length === 0) {
         logDebug('POWER ACTION NO STARTED SERVER -> EXECUTE DIRECTLY', targetAction);
         await executePendingPowerAction();
@@ -1049,11 +1049,11 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            `${rconResult.summary} | ${targetAction.toUpperCase()} ANNULÉ (stopall non envoyé)`
+            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED (stopall non envoyé)`
         );
 
         await interaction.message.edit({
-            content: 'Gestion serveur',
+            content: 'server list',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after stopall send fail :', err);
@@ -1196,7 +1196,7 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
             await upsertStatusMessage(
                 channel,
                 messageKey,
-                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR ETEINT:${off.join(',') || '-'}`
+                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
             );
             continue;
         }
@@ -1207,7 +1207,7 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
             await upsertStatusMessage(
                 channel,
                 messageKey,
-                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR ETEINT:${off.join(',') || '-'}`
+                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
             );
             continue;
         }
@@ -1223,14 +1223,14 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
         await upsertStatusMessage(
             channel,
             messageKey,
-            `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR ETEINT:${off.join(',') || '-'}`
+            `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
         );
     }
 
     const summary =
         `💾 OK:${ok.join(',') || '-'} | ` +
         `FAIL:${fail.join(',') || '-'} | ` +
-        `SERVEUR ETEINT:${off.join(',') || '-'}`;
+        `SERVEUR OFFLINE:${off.join(',') || '-'}`;
 
     await upsertStatusMessage(channel, messageKey, summary);
 
@@ -1275,7 +1275,7 @@ function isStatsMessage(content) {
 
 function isEmptyListMessage(content) {
     if (!content) return false;
-    return content.replace(/\r/g, '').trim().toLowerCase().includes('aucun serveur actif.');
+    return content.replace(/\r/g, '').trim().toLowerCase().includes('all server offline.');
 }
 
 async function getLatestStartedIdsFromWgsm(channel) {
@@ -1638,7 +1638,7 @@ client.on('interactionCreate', async interaction => {
 
             const channel = await client.channels.fetch(BOT_CHANNEL_ID).catch(() => null);
             if (!channel || !channel.isTextBased()) {
-                return interaction.editReply({ content: '❌ Canal introuvable.' }).catch(() => { });
+                return interaction.editReply({ content: '❌ Channel not found.' }).catch(() => { });
             }
 
             const statusData = readStatusFile();
@@ -1647,12 +1647,12 @@ client.on('interactionCreate', async interaction => {
             const savedMenuId = getStatusMessageId('main_menu');
             let menuMessage = null;
 
-            // 1. essayer direct avec ID
+            // 1. Try directly with ID
             if (savedMenuId) {
                 menuMessage = await channel.messages.fetch(savedMenuId).catch(() => null);
             }
 
-            // 2. fallback si introuvable
+            // 2. Fallback if not found
             if (!menuMessage) {
                 menuMessage = await findMainMenuMessage(channel);
 
@@ -1661,13 +1661,13 @@ client.on('interactionCreate', async interaction => {
                 }
             }
 
-            // 3. si trouvé → refresh
+            // 3. If found → refresh
             if (menuMessage) {
                 requestMenuRefresh(lastSelectedServerId);
             } else {
-                // 4. sinon créer
+                // 4. otherwise create
                 const msg = await channel.send({
-                    content: 'Gestion serveur',
+                    content: 'server list',
                     components: buildInterface(lastSelectedServerId)
                 }).catch(err => {
                     logError('Erreur create menu /server :', err);
@@ -1710,9 +1710,11 @@ client.on('interactionCreate', async interaction => {
         logDebug('BUTTON CLICK', 'action =', action, 'id =', id);
 
         if (id && action !== 'confirm' && action !== 'cancel') {
-            // Ne jamais changer la sélection utilisateur juste parce qu’un bouton a été cliqué.
-            // La sélection ne doit changer que via le menu select_server
-            // ou si le serveur sélectionné devient réellement STOPPED / n’existe plus / aucun serveur actif.
+            // Never change the user selection simply because a button was clicked.
+
+            // The selection should only change via the select_server menu
+
+            // or if the selected server actually becomes STOPPED / no longer exists / all servers are offline.
             logDebug('KEEP USER SELECTION ON BUTTON', 'clickedId =', id, 'selected =', lastSelectedServerId);
         }
 
@@ -1758,7 +1760,7 @@ client.on('interactionCreate', async interaction => {
             isPowerActionRunning = false;
 
             await interaction.message.edit({
-                content: 'Gestion serveur',
+                content: 'server list',
                 components: buildInterface(lastSelectedServerId)
             }).catch(err => {
                 logError('Erreur cancel edit :', err);
@@ -1799,7 +1801,7 @@ client.on('interactionCreate', async interaction => {
                     await upsertStatusMessage(
                         interaction.channel,
                         'live_status',
-                        '💾 OK:- | FAIL:- | SERVEUR ETEINT:-'
+                        '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
                     );
 
                     if (cmdMsg) {
@@ -1857,14 +1859,14 @@ client.on('interactionCreate', async interaction => {
                             ok: [],
                             fail: [],
                             off: [],
-                            summary: `💾 OK:- | FAIL:- | SERVEUR ETEINT:${id}`
+                            summary: `💾 OK:- | FAIL:- | SERVEUR OFFLINE:${id}`
                         };
 
                         if (isStarted) {
                             await upsertStatusMessage(
                                 interaction.channel,
                                 'live_status',
-                                `⏳ attente save RCON | FAIL:- | SERVEUR ETEINT:${id}`
+                                `⏳ attente save RCON | FAIL:- | SERVEUR OFFLINE:${id}`
                             );
 
                             rconResult = await runRconForIds(
@@ -1904,7 +1906,7 @@ client.on('interactionCreate', async interaction => {
                             await upsertStatusMessage(
                                 interaction.channel,
                                 'live_status',
-                                `${rconResult.summary} | STOP ${id} ANNULÉ`
+                                `${rconResult.summary} | STOP ${id} CANCELED`
                             );
                             return;
                         }
@@ -1966,7 +1968,7 @@ client.on('interactionCreate', async interaction => {
                 await upsertStatusMessage(
                     interaction.channel,
                     'live_status',
-                    srv.ip || 'Aucun IP'
+                    srv.ip || 'empty IP'
                 );
                 break;
             }
@@ -1975,7 +1977,7 @@ client.on('interactionCreate', async interaction => {
                 await upsertStatusMessage(
                     interaction.channel,
                     'live_status',
-                    srv.pass || 'Aucun PASS'
+                    srv.pass || 'empty PASS'
                 );
                 break;
             }
