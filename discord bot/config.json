@@ -1,0 +1,9 @@
+{
+  "token": "your bot token",
+  "channel_id": "your channel id",
+  "bot_author_id": "main bot id",
+  "wgsm": "your wgsm id",
+  "wgsmPath": "C:\\your path where status_name_ip.json file are",
+  "reboot_shutdown_id": "put id of authorise self/friend to use reboot/shutdown of pc",
+  "stopall_id": "put id of authorise self/friend to use stopall server"
+}
