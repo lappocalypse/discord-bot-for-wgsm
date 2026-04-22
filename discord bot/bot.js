@@ -18,7 +18,7 @@ const { exec } = require('child_process');
 // =======================
 // 🔹 DEBUG
 // =======================
-const DEBUG = true;
+const DEBUG = false;
 
 function logDebug(...args) {
     if (!DEBUG) return;
