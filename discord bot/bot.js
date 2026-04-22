@@ -47,7 +47,7 @@ const client = new Client({
 // =======================
 // 📁 CONFIG
 // =======================
-const SERVERS_FILE = path.join(config.wgsmPath, 'status_name_ip.json');
+const SERVERS_FILE = path.join(config.Path, 'status_name_ip.json');
 const STATUS_FILE = SERVERS_FILE;
 
 const BOT_CHANNEL_ID = String(config.channel_id).trim();
