@@ -1,5 +1,5 @@
 @echo off
-set BOT_DIR=C:\your path where bot.js file are
+set BOT_DIR=C:\your path where the folder bot.js are in
 set LOG_FILE=%BOT_DIR%\bot-log.txt
 
 :loop
