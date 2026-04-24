@@ -54,14 +54,14 @@ const BOT_CHANNEL_ID = String(config.channel_id).trim();
 const WGSM_BOT_ID = String(config.wgsm).trim();
 const MY_BOT_AUTHOR_ID = String(config.bot_author_id).trim();
 
-const IGNORED_IDS = ['250', '251'];
+const IGNORED_IDS = [];
 
 const RCON_TIMEOUT_MS = 5000;
 const RCON_POST_SAVE_DELAY_MS = 3000;
 
 const OS_POWER_DELAY_SEC = 240;
 const POST_STOPALL_DELAY_MS = 5000;
-const FALLBACK_DELETE_DELAY_MS = 5000;
+const FALLBACK_DELETE_DELAY_MS = 10000;
 const SERVER_ACTION_UNLOCK_MS = 60000;
 const MENU_REFRESH_DEBOUNCE_MS = 100;
 
@@ -101,17 +101,17 @@ async function waitForSafeShutdown(pollMs = 1000) {
     while (true) {
         const data = readStatusFile();
 
-        const active = Object.entries(data)
+        const servers = Object.entries(data)
             .filter(([key]) => key !== '_meta')
             .map(([id, val]) => ({
                 id,
                 status: getStatusValue(val)
             }));
 
-        const blocking = active.filter(s => s.status === 'STOPPED');
+        const blocking = servers.filter(s => s.status !== 'STOPPED');
 
         if (blocking.length === 0) {
-            logDebug('SAFE SHUTDOWN OK', active);
+            logDebug('SAFE SHUTDOWN OK', servers);
             return true;
         }
 
@@ -158,6 +158,63 @@ async function safeDeleteMessage(msg) {
 
     } catch (err) {
         logDebug('DELETE MESSAGE ERROR', err?.message || err);
+    }
+}
+
+async function deleteAndClearPending(type, key = null) {
+    try {
+        if (type === 'list') {
+            const msg = pendingRawWgsmMessages.list;
+            if (!msg) return;
+
+            pendingRawWgsmMessages.list = null;
+            await safeDeleteMessage(msg);
+            return;
+        }
+
+        if (type === 'stats') {
+            const msg = pendingRawWgsmMessages.stats;
+            if (!msg) return;
+
+            pendingRawWgsmMessages.stats = null;
+            await safeDeleteMessage(msg);
+            return;
+        }
+
+        if (type === 'stopall') {
+            const msg = pendingRawWgsmMessages.stopall;
+            if (!msg) return;
+
+            pendingRawWgsmMessages.stopall = null;
+            await safeDeleteMessage(msg);
+            return;
+        }
+
+        if (type === 'startById') {
+            const arr = pendingRawWgsmMessages.start[key];
+            if (!Array.isArray(arr) || arr.length === 0) return;
+
+            delete pendingRawWgsmMessages.start[key];
+
+            for (const msg of arr) {
+                await safeDeleteMessage(msg);
+            }
+            return;
+        }
+
+        if (type === 'stopById') {
+            const arr = pendingRawWgsmMessages.stop[key];
+            if (!Array.isArray(arr) || arr.length === 0) return;
+
+            delete pendingRawWgsmMessages.stop[key];
+
+            for (const msg of arr) {
+                await safeDeleteMessage(msg);
+            }
+            return;
+        }
+    } catch (err) {
+        logDebug('DELETE AND CLEAR ERROR', type, key, err?.message || err);
     }
 }
 
@@ -259,78 +316,12 @@ function syncSelectedServerFromStatusData(statusData) {
 
 function schedulePendingDelete(type, key, delayMs = FALLBACK_DELETE_DELAY_MS) {
     setTimeout(async () => {
-        try {
-            if (type === 'list') {
-                const msg = pendingRawWgsmMessages.list;
-                if (!msg) return;
-
-                logDebug('FALLBACK DELETE LIST', msg.id);
-                await safeDeleteMessage(msg);
-
-                if (pendingRawWgsmMessages.list?.id === msg.id) {
-                    pendingRawWgsmMessages.list = null;
-                }
-                return;
-            }
-
-            if (type === 'stats') {
-                const msg = pendingRawWgsmMessages.stats;
-                if (!msg) return;
-
-                logDebug('FALLBACK DELETE STATS', msg.id);
-                await safeDeleteMessage(msg);
-
-                if (pendingRawWgsmMessages.stats?.id === msg.id) {
-                    pendingRawWgsmMessages.stats = null;
-                }
-                return;
-            }
-
-            if (type === 'startById') {
-                const arr = pendingRawWgsmMessages.start[key];
-                if (!Array.isArray(arr) || arr.length === 0) return;
-
-                for (const msg of arr) {
-                    logDebug('FALLBACK DELETE START', key, msg.id);
-                    await safeDeleteMessage(msg);
-                }
-
-                delete pendingRawWgsmMessages.start[key];
-                return;
-            }
-
-            if (type === 'stopById') {
-                const arr = pendingRawWgsmMessages.stop[key];
-                if (!Array.isArray(arr) || arr.length === 0) return;
-
-                for (const msg of arr) {
-                    logDebug('FALLBACK DELETE STOP', key, msg.id);
-                    await safeDeleteMessage(msg);
-                }
-
-                delete pendingRawWgsmMessages.stop[key];
-                return;
-            }
-        } catch (err) {
-            logDebug('FALLBACK DELETE ERROR', type, key, err?.message || err);
-        }
+        await deleteAndClearPending(type, key);
     }, delayMs);
 }
 function scheduleStopAllDelete(delayMs = FALLBACK_DELETE_DELAY_MS) {
     setTimeout(async () => {
-        try {
-            const msg = pendingRawWgsmMessages.stopall;
-            if (!msg) return;
-
-            logDebug('FALLBACK DELETE STOPALL', msg.id);
-            await safeDeleteMessage(msg);
-
-            if (pendingRawWgsmMessages.stopall?.id === msg.id) {
-                pendingRawWgsmMessages.stopall = null;
-            }
-        } catch (err) {
-            logDebug('FALLBACK DELETE STOPALL ERROR', err?.message || err);
-        }
+       await deleteAndClearPending('stopall');
     }, delayMs);
 }
 function getSelectedStatus() {
@@ -347,11 +338,17 @@ async function handleWgsmEmptyList(channel = null) {
         delete serverActionInProgress[id];
     }
 
-    pendingRawWgsmMessages.start = {};
-    pendingRawWgsmMessages.stop = {};
-    pendingRawWgsmMessages.stopall = null;
-    pendingRawWgsmMessages.list = null;
-    pendingRawWgsmMessages.stats = null;
+    for (const id of Object.keys(pendingRawWgsmMessages.start)) {
+        await deleteAndClearPending('startById', id);
+    }
+
+    for (const id of Object.keys(pendingRawWgsmMessages.stop)) {
+        await deleteAndClearPending('stopById', id);
+    }
+
+    await deleteAndClearPending('stopall');
+    await deleteAndClearPending('list');
+    await deleteAndClearPending('stats');
 
     syncSelectedServerFromStatusData(readStatusFile());
     requestMenuRefresh(lastSelectedServerId);
@@ -374,6 +371,13 @@ function ensureServerEntry(data, id) {
     }
 
     return data[id];
+}
+function hasAnyStartedServer() {
+    const data = readStatusFile();
+
+    return Object.entries(data)
+        .filter(([key]) => key !== '_meta')
+        .some(([, value]) => getStatusValue(value) === 'STARTED');
 }
 
 // =======================
@@ -594,11 +598,12 @@ function buildInterface(selectedId = null) {
     const components = [];
 
     const availableServers = servers.filter(s => !IGNORED_IDS.includes(s.id));
+    const hasStartedServer = hasAnyStartedServer();
 
     if (availableServers.length > 0) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId('select_server')
-            .setPlaceholder('Choose a serveur')
+            .setPlaceholder('Choose a server')
             .addOptions(
                 availableServers.map(s => ({
                     label: s.name,
@@ -636,7 +641,13 @@ function buildInterface(selectedId = null) {
                 .setCustomId('shutdown')
                 .setLabel('SHUTDOWN PC')
                 .setStyle(ButtonStyle.Danger)
-                .setDisabled(isPowerActionRunning)
+                .setDisabled(isPowerActionRunning),
+
+            new ButtonBuilder()
+                .setCustomId('stopall')
+                .setLabel('STOP ALL')
+                .setStyle(ButtonStyle.Danger)
+                .setDisabled(isPowerActionRunning || !hasStartedServer)
         )
     );
 
@@ -656,11 +667,13 @@ function buildInterface(selectedId = null) {
         }
 
         const disableStart =
+            isPowerActionRunning ||
             status === 'STARTED' ||
             actionLock === 'start' ||
             actionLock === 'stop';
 
         const disableStop =
+            isPowerActionRunning ||        
             status === 'STOPPED' ||
             actionLock === 'start' ||
             actionLock === 'stop';
@@ -780,7 +793,7 @@ async function updateMenuStatus(serverId = null) {
         const components = buildInterface(selected);
 
         const signature = JSON.stringify({
-            content: 'serveur list',
+            content: 'Server Menu',
             selected,
             components: components.map(row => ({
                 components: row.components.map(c => ({
@@ -810,7 +823,7 @@ async function updateMenuStatus(serverId = null) {
         }
 
         await menuMessage.edit({
-            content: 'serveur list',
+            content: 'Server Menu',
             components
         }).catch(err => {
             logDebug('UPDATE MENU STATUS EDIT FAIL', err?.message || err);
@@ -909,8 +922,14 @@ async function executePendingPowerAction() {
 }
 
 async function showPowerConfirm(interaction, actionName) {
+    const actionLabel =
+        actionName === 'shutdown' ? 'SHUTDOWN PC' :
+            actionName === 'reboot' ? 'REBOOT PC' :
+                actionName === 'stopall' ? 'STOP ALL' :
+                    actionName.toUpperCase();
+
     await interaction.message.edit({
-        content: `Confirmer ${actionName.toUpperCase()} ?`,
+        content: `Confirmer ${actionLabel} ?`,
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
@@ -935,7 +954,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
 
     try {
         await interaction.message.edit({
-            content: 'server list',
+            content: 'Server Menu',
             components: buildInterface(lastSelectedServerId)
         });
     } catch (err) {
@@ -964,8 +983,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
     let rconResult = {
         ok: [],
         fail: [],
-        off: [],
-        summary: '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
+        summary: '💾 OK:- | FAIL:-'
     };
 
     if (startedRconIds.length > 0) {
@@ -979,7 +997,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
+            '💾 OK:- | FAIL:-'
         );
     }
 
@@ -991,10 +1009,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         pendingPowerAction = null;
         isPowerActionRunning = false;
 
-        if (pendingRawWgsmMessages.stopall) {
-            await safeDeleteMessage(pendingRawWgsmMessages.stopall);
-            pendingRawWgsmMessages.stopall = null;
-        }
+        await deleteAndClearPending('stopall');
 
         await upsertStatusMessage(
             interaction.channel,
@@ -1003,7 +1018,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         );
 
         await interaction.message.edit({
-            content: 'server list',
+            content: 'Server Menu',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after canceled power action :', err);
@@ -1049,11 +1064,11 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED (stopall non envoyé)`
+            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED (stopall not sent)`
         );
 
         await interaction.message.edit({
-            content: 'server list',
+            content: 'Server Menu',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after stopall send fail :', err);
@@ -1061,6 +1076,166 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
 
         requestMenuRefresh(lastSelectedServerId);
         return;
+    }
+}
+
+async function handleConfirmedStopAll(interaction) {
+    logDebug('STOPALL CONFIRMED');
+    isPowerActionRunning = true;
+
+    try {
+        await interaction.message.edit({
+            content: 'Serveur Menu',
+            components: buildInterface(lastSelectedServerId)
+        });
+    } catch (err) {
+        logError('Erreur confirm stopall edit :', err);
+    }
+
+    await upsertStatusMessage(
+        interaction.channel,
+        'live_status',
+        '⏳ STOP ALL en cours...'
+    );
+
+    const wgsmStartedIds = await getLatestStartedIdsFromWgsm(interaction.channel);
+
+    const startedRconIds = getRconEnabledServers()
+        .map(s => s.id)
+        .filter(serverId => wgsmStartedIds.includes(serverId));
+
+    logDebug(
+        'STOPALL STARTED RCON IDS FROM WGSM',
+        'wgsmStartedIds =', wgsmStartedIds,
+        'startedRconIds =', startedRconIds
+    );
+
+    let rconResult = {
+        ok: [],
+        fail: [],
+        summary: '💾 OK:- | FAIL:-'
+    };
+
+    if (startedRconIds.length > 0) {
+        rconResult = await runRconForIds(
+            interaction.channel,
+            startedRconIds,
+            'live_status',
+            { allowNonStarted: true }
+        );
+    } else {
+        await upsertStatusMessage(
+            interaction.channel,
+            'live_status',
+            '💾 OK:- | FAIL:-'
+        );
+    }
+
+    const allStartedSaved = startedRconIds.every(serverId => rconResult.ok.includes(serverId));
+
+    if (!allStartedSaved) {
+        logDebug('STOPALL CANCELED BECAUSE RCON FAILED');
+
+        isPowerActionRunning = false;
+
+        await deleteAndClearPending('stopall');
+
+        await upsertStatusMessage(
+            interaction.channel,
+            'live_status',
+            `${rconResult.summary} | STOPALL ANNULÉ`
+        );
+
+        await interaction.message.edit({
+            content: 'Serveur Menu',
+            components: buildInterface(lastSelectedServerId)
+        }).catch(err => {
+            logError('Erreur restore menu after canceled stopall :', err);
+        });
+
+        requestMenuRefresh(lastSelectedServerId);
+        return;
+    }
+
+    if (wgsmStartedIds.length === 0) {
+        logDebug('STOPALL NO STARTED SERVER -> DONE DIRECTLY');
+
+        setAllStatusesStopped();
+        lastSelectedServerId = null;
+        lastSelectedServerWasActive = false;
+
+        isPowerActionRunning = false;
+        requestMenuRefresh(lastSelectedServerId);
+
+        await upsertStatusMessage(
+            interaction.channel,
+            'live_status',
+            `${rconResult.summary} | STOPALL terminé`
+        );
+
+        await interaction.message.edit({
+            content: 'Serveur Menu',
+            components: buildInterface(lastSelectedServerId)
+        }).catch(err => {
+            logError('Erreur restore menu after stopall direct done :', err);
+        });
+
+        return;
+    }
+
+    const cmdMsg = await sendWgsmCommand(interaction.channel, '!wgsm stopall');
+    pendingRawWgsmMessages.stopall = cmdMsg || null;
+
+    if (cmdMsg) {
+        scheduleStopAllDelete();
+
+        await waitForSafeShutdown();
+
+        setAllStatusesStopped();
+        lastSelectedServerId = null;
+        lastSelectedServerWasActive = false;
+
+        // délock tout de suite dès que l'arrêt est réellement fini
+        isPowerActionRunning = false;
+
+        if (pendingRawWgsmMessages.stopall) {
+            await safeDeleteMessage(pendingRawWgsmMessages.stopall);
+            pendingRawWgsmMessages.stopall = null;
+        }
+
+        requestMenuRefresh(lastSelectedServerId);
+
+        await upsertStatusMessage(
+            interaction.channel,
+            'live_status',
+            `${rconResult.summary} | STOPALL terminé`
+        );
+
+        await interaction.message.edit({
+            content: 'Serveur Menu',
+            components: buildInterface(lastSelectedServerId)
+        }).catch(err => {
+            logError('Erreur restore menu after stopall done :', err);
+        });
+    } else {
+        logDebug('STOPALL FAILED -> CANCEL');
+
+        isPowerActionRunning = false;
+
+        await upsertStatusMessage(
+            interaction.channel,
+            'live_status',
+            `${rconResult.summary} | STOPALL ANNULÉ (stopall non envoyé)`
+        );
+
+        await interaction.message.edit({
+            content: 'Serveur Menu',
+            components: buildInterface(lastSelectedServerId)
+        }).catch(err => {
+            logError('Erreur restore menu after stopall send fail :', err);
+        });
+
+        requestMenuRefresh(lastSelectedServerId);
     }
 }
 
@@ -1181,7 +1356,6 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
 
     const ok = [];
     const fail = [];
-    const off = [];
 
     logDebug('RUN RCON FOR IDS', uniqueIds, 'allowNonStarted =', allowNonStarted);
 
@@ -1196,19 +1370,12 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
             await upsertStatusMessage(
                 channel,
                 messageKey,
-                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
+                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'}`
             );
             continue;
         }
 
         if (!allowNonStarted && status !== 'STARTED') {
-            off.push(id);
-
-            await upsertStatusMessage(
-                channel,
-                messageKey,
-                `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
-            );
             continue;
         }
 
@@ -1223,20 +1390,17 @@ async function runRconForIds(channel, targetIds, messageKey = 'live_status', opt
         await upsertStatusMessage(
             channel,
             messageKey,
-            `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'} | SERVEUR OFFLINE:${off.join(',') || '-'}`
+            `💾 ${i + 1}/${uniqueIds.length} | FAIL:${fail.join(',') || '-'}`
         );
     }
 
-    const summary =
-        `💾 OK:${ok.join(',') || '-'} | ` +
-        `FAIL:${fail.join(',') || '-'} | ` +
-        `SERVEUR OFFLINE:${off.join(',') || '-'}`;
-
+    const summary = `💾 OK:${ok.join(',') || '-'} | FAIL:${fail.join(',') || '-'}`;
+    
     await upsertStatusMessage(channel, messageKey, summary);
 
     logDebug('RUN RCON SUMMARY', summary);
 
-    return { ok, fail, off, summary };
+    return { ok, fail, summary };
 }
 
 // =======================
@@ -1353,10 +1517,7 @@ async function handleWgsmStatusMessage(message) {
 
         if (isStatsMessage(content)) {
             logDebug('WGSM STATS MESSAGE DETECTED');
-            if (pendingRawWgsmMessages.stats) {
-                await safeDeleteMessage(pendingRawWgsmMessages.stats);
-                pendingRawWgsmMessages.stats = null;
-            }
+            await deleteAndClearPending('stats');
             return;
         }
 
@@ -1390,24 +1551,15 @@ async function handleWgsmStatusMessage(message) {
 
             setStatusesFromStartedIds(startedIds);
 
-            await safeDeleteMessage(pendingRawWgsmMessages.list);
-            pendingRawWgsmMessages.list = null;
+            await deleteAndClearPending('list');
 
             for (const item of parsedStatuses) {
                 if (item.status === 'STARTED' && pendingRawWgsmMessages.start[item.id]?.length) {
-                    for (const msg of pendingRawWgsmMessages.start[item.id]) {
-                        logDebug('LIST DELETE START MSG', 'id =', item.id, 'msgId =', msg.id);
-                        await safeDeleteMessage(msg);
-                    }
-                    delete pendingRawWgsmMessages.start[item.id];
+                    await deleteAndClearPending('startById', item.id);
                 }
 
                 if (item.status === 'STOPPED' && pendingRawWgsmMessages.stop[item.id]?.length) {
-                    for (const msg of pendingRawWgsmMessages.stop[item.id]) {
-                        logDebug('LIST DELETE STOP MSG', 'id =', item.id, 'msgId =', msg.id);
-                        await safeDeleteMessage(msg);
-                    }
-                    delete pendingRawWgsmMessages.stop[item.id];
+                    await deleteAndClearPending('stopById', item.id);
                 }
             }
 
@@ -1448,11 +1600,7 @@ async function handleWgsmStatusMessage(message) {
                 delete serverActionInProgress[id];
 
                 if (pendingRawWgsmMessages.start[id]?.length) {
-                    for (const msg of pendingRawWgsmMessages.start[id]) {
-                        logDebug('DELETE START MSG', 'id =', id, 'msgId =', msg.id);
-                        await safeDeleteMessage(msg);
-                    }
-                    delete pendingRawWgsmMessages.start[id];
+                    await deleteAndClearPending('startById', id);
                     logDebug('START PENDING CLEARED', 'id =', id);
                 }
 
@@ -1465,11 +1613,7 @@ async function handleWgsmStatusMessage(message) {
                 delete serverActionInProgress[id];
 
                 if (pendingRawWgsmMessages.stop[id]?.length) {
-                    for (const msg of pendingRawWgsmMessages.stop[id]) {
-                        logDebug('DELETE STOP MSG', 'id =', id, 'msgId =', msg.id);
-                        await safeDeleteMessage(msg);
-                    }
-                    delete pendingRawWgsmMessages.stop[id];
+                    await deleteAndClearPending('stopById', id);
                     logDebug('STOP PENDING CLEARED', 'id =', id);
                 }
 
@@ -1567,6 +1711,11 @@ async function bootstrapFromRecentWgsmMessages() {
 // =======================
 // 🔹 EVENTS
 // =======================
+
+function isRawWgsmCommand(content) {
+    return /^!wgsm(\s|$)/i.test((content || '').trim());
+}
+
 client.on('messageCreate', async message => {
     try {
         if (!message) return;
@@ -1588,6 +1737,28 @@ client.on('messageCreate', async message => {
                 'content =', message.content
             );
         }
+        // Deletes !wgsm commands sent by other users
+        // but does not touch your bot's messages or the WGSM bot itself.
+        if (
+            message.channel?.id === BOT_CHANNEL_ID &&
+            isRawWgsmCommand(message.content) &&
+            message.author?.id !== MY_BOT_AUTHOR_ID &&
+            message.author?.id !== WGSM_BOT_ID
+        ) {
+            logDebug(
+                'DELETE USER WGSM COMMAND AFTER 5S',
+                'author =', message.author.id,
+                'id =', message.id,
+                'content =', message.content
+            );
+
+            setTimeout(async () => {
+                try {
+                    await safeDeleteMessage(message);
+                } catch (_) { }
+            }, 5000);
+            return;
+        }        
 
         await handleWgsmStatusMessage(message);
     } catch (err) {
@@ -1629,9 +1800,62 @@ client.once('clientReady', async () => {
 // =======================
 // 🔹 INTERACTIONS
 // =======================
+
+function getConfigIdList(key) {
+    return Array.isArray(config[key])
+        ? config[key].map(x => String(x).trim()).filter(Boolean)
+        : [];
+}
+
+function isUserBlacklisted(userId) {
+    return getConfigIdList('menu_blacklist').includes(String(userId));
+}
+
+function canUseMenu(userId) {
+    const id = String(userId);
+    const whitelist = getConfigIdList('menu_whitelist');
+
+    if (isUserBlacklisted(id)) return false;
+
+    // Si whitelist vide = tout le monde peut utiliser le menu, sauf blacklist
+    if (whitelist.length === 0) return true;
+
+    return whitelist.includes(id);
+}
+
+function canUsePowerButtons(userId) {
+    const id = String(userId);
+    const whitelist = getConfigIdList('power_whitelist');
+
+    if (isUserBlacklisted(id)) return false;
+
+    // Si whitelist vide = personne sauf si tu veux changer cette logique
+    if (whitelist.length === 0) return false;
+
+    return whitelist.includes(id);
+}
+
 client.on('interactionCreate', async interaction => {
     try {
         logDebug('INTERACTION', 'type =', interaction.type, 'customId =', interaction.customId || 'slash');
+                logDebug(
+                    'ACCESS CHECK',
+                    'user =', interaction.user.id,
+                    'blacklist =', getConfigIdList('menu_blacklist'),
+                    'isBlacklisted =', isUserBlacklisted(interaction.user.id),
+                    'menuWhitelist =', getConfigIdList('menu_whitelist'),
+                    'powerWhitelist =', getConfigIdList('power_whitelist')
+                );
+        
+                if (isUserBlacklisted(interaction.user.id)) {
+                    if (interaction.isRepliable()) {
+                        await interaction.reply({
+                            content: '❌ Accès refusé.',
+                            flags: MessageFlags.Ephemeral
+                        }).catch(() => { });
+                    }
+                    return;
+                }
 
         if (interaction.isChatInputCommand() && interaction.commandName === 'server') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1667,7 +1891,7 @@ client.on('interactionCreate', async interaction => {
             } else {
                 // 4. otherwise create
                 const msg = await channel.send({
-                    content: 'server list',
+                    content: 'Server Menu',
                     components: buildInterface(lastSelectedServerId)
                 }).catch(err => {
                     logError('Erreur create menu /server :', err);
@@ -1680,6 +1904,19 @@ client.on('interactionCreate', async interaction => {
             }
 
             return interaction.deleteReply().catch(() => { });
+        }
+
+        if (
+            (interaction.isStringSelectMenu() || interaction.isButton()) &&
+            !canUseMenu(interaction.user.id)
+        ) {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.reply({
+                    content: '❌ Tu n’es pas autorisé à utiliser ce menu.',
+                    flags: MessageFlags.Ephemeral
+                }).catch(() => { });
+            }
+            return;
         }
 
         if (interaction.isStringSelectMenu() && interaction.customId === 'select_server') {
@@ -1700,10 +1937,24 @@ client.on('interactionCreate', async interaction => {
 
         if (!interaction.isButton()) return;
 
+        if (
+            ['reboot', 'shutdown', 'stopall', 'confirm_reboot', 'confirm_shutdown', 'confirm_stopall']
+                .includes(interaction.customId) &&
+            !canUsePowerButtons(interaction.user.id)
+        ) {
+            await interaction.reply({
+                content: '❌ Tu n’es pas autorisé à utiliser REBOOT / SHUTDOWN / STOP ALL.',
+                flags: MessageFlags.Ephemeral
+            }).catch(() => { });
+            return;
+        }        
+
         const ok = await safeDeferUpdate(interaction);
         if (!ok) return;
 
-        const [action, id] = interaction.customId.split('_');
+        const parts = interaction.customId.split('_');
+        const action = parts[0];
+        const id = parts.slice(1).join('_');
         const servers = getServers();
         const srv = servers.find(s => s.id === id);
 
@@ -1711,9 +1962,7 @@ client.on('interactionCreate', async interaction => {
 
         if (id && action !== 'confirm' && action !== 'cancel') {
             // Never change the user selection simply because a button was clicked.
-
-            // The selection should only change via the select_server menu
-
+            // The selection should only change via the menu select_server
             // or if the selected server actually becomes STOPPED / no longer exists / all servers are offline.
             logDebug('KEEP USER SELECTION ON BUTTON', 'clickedId =', id, 'selected =', lastSelectedServerId);
         }
@@ -1744,12 +1993,38 @@ client.on('interactionCreate', async interaction => {
             return;
         }
 
-        if ((interaction.customId === 'reboot' || interaction.customId === 'shutdown') && isPowerActionRunning) {
+        if (
+            (interaction.customId === 'reboot' ||
+                interaction.customId === 'shutdown' ||
+                interaction.customId === 'stopall') &&
+            isPowerActionRunning
+        ) {
             logDebug('POWER BUTTON BLOCKED because action already running');
             return;
         }
 
-        if (interaction.customId === 'reboot' || interaction.customId === 'shutdown') {
+        if (interaction.customId === 'stopall' && !hasAnyStartedServer()) {
+            logDebug('STOPALL BLOCKED because no server is STARTED');
+
+            setAllStatusesStopped();
+            lastSelectedServerId = null;
+            lastSelectedServerWasActive = false;
+
+            await upsertStatusMessage(
+                interaction.channel,
+                'live_status',
+                'Aucun serveur actif pour STOP ALL'
+            );
+
+            requestMenuRefresh(lastSelectedServerId);
+            return;
+        }
+
+        if (
+            interaction.customId === 'reboot' ||
+            interaction.customId === 'shutdown' ||
+            interaction.customId === 'stopall'
+        ) {
             await showPowerConfirm(interaction, interaction.customId);
             return;
         }
@@ -1760,7 +2035,7 @@ client.on('interactionCreate', async interaction => {
             isPowerActionRunning = false;
 
             await interaction.message.edit({
-                content: 'server list',
+                content: 'Server Menu',
                 components: buildInterface(lastSelectedServerId)
             }).catch(err => {
                 logError('Erreur cancel edit :', err);
@@ -1771,6 +2046,12 @@ client.on('interactionCreate', async interaction => {
 
         if (action === 'confirm') {
             const targetAction = id;
+
+            if (targetAction === 'stopall') {
+                await handleConfirmedStopAll(interaction);
+                return;
+            }
+
             await handleConfirmedPowerAction(interaction, targetAction);
             return;
         }
@@ -1801,7 +2082,7 @@ client.on('interactionCreate', async interaction => {
                     await upsertStatusMessage(
                         interaction.channel,
                         'live_status',
-                        '💾 OK:- | FAIL:- | SERVEUR OFFLINE:-'
+                        '💾 OK:- | FAIL:-'
                     );
 
                     if (cmdMsg) {
@@ -1858,15 +2139,14 @@ client.on('interactionCreate', async interaction => {
                         let rconResult = {
                             ok: [],
                             fail: [],
-                            off: [],
-                            summary: `💾 OK:- | FAIL:- | SERVEUR OFFLINE:${id}`
+                            summary: `💾 OK:- | FAIL:-`
                         };
 
                         if (isStarted) {
                             await upsertStatusMessage(
                                 interaction.channel,
                                 'live_status',
-                                `⏳ attente save RCON | FAIL:- | SERVEUR OFFLINE:${id}`
+                                `⏳ attente save RCON | FAIL:-`
                             );
 
                             rconResult = await runRconForIds(

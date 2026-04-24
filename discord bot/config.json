@@ -1,9 +1,10 @@
 {
   "token": "your bot token",
   "channel_id": "your channel id",
-  "bot_author_id": "main bot id",
-  "wgsm": "your wgsm id",
-  "Path": "C:\\your path where status_name_ip.json file are",
-  "reboot_shutdown_id": "put id of authorise self/friend to use reboot/shutdown of pc",
-  "stopall_id": "put id of authorise self/friend to use stopall server"
+  "bot_author_id": "your custom bot id",
+  "wgsm": "wgsm bot id",
+  "Path": "C:\\folder",
+  "menu_whitelist": [],
+  "power_whitelist": [],
+  "menu_blacklist": []
 }
