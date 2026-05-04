@@ -10,8 +10,8 @@ start-bot.vbs - modify the path where folder bot-loop.bat WshShell.Run "C:\folde
 
 bot-loop.bat - set BOT_DIR="C:\folder , is the folder where bot.js are in
 
-config.json - the path "C:\\folder" , the token id , the channel id , bot id , window gsm bot id , whitelist empty for all are authorise to use menu or put id of authorise self/friend to use the menu 
-              power is for whitelist who can use reboot pc/shutdown pc and stopall server at once and blacklist empty or any id you want to not use the menu exemple ["id","id"]
+config.json - the path "C:\\folder" , the token id , the channel id , bot id , window gsm bot id , whitelist empty for all are                   authorise to use menu or put id of authorise self/friend to use the menu 
+              power is for whitelist who can use reboot pc/shutdown pc and stopall server at once and blacklist empty or any id                  you want to not use the menu exemple ["id","id"]
               all id are from discord and token are from when you create a bot
 
 
