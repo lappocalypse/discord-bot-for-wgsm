@@ -99,7 +99,7 @@ function wait(ms) {
 
 async function waitForSafeShutdown(pollMs = 1000) {
     while (true) {
-        const data = readStatusFile();
+        const data = readStatusFileFresh();
 
         const servers = Object.entries(data)
             .filter(([key]) => key !== '_meta')
@@ -269,7 +269,7 @@ function syncSelectedServerFromStatusData(statusData) {
     const currentStatus = hasValidSelected ? getStatusValue(statusData[currentSelected]) : 'INCONNU';
     const currentIsActive = hasValidSelected && currentStatus === 'STARTED';
 
-    // 1) if the selected server no longer exists
+    // 1) si le serveur sélectionné n'existe plus
     if (currentSelected && !servers.includes(currentSelected)) {
         if (activeIds.length > 0) {
             lastSelectedServerId = activeIds[0];
@@ -283,7 +283,7 @@ function syncSelectedServerFromStatusData(statusData) {
         return;
     }
 
-    // 2) if all server offline according to WGSM
+    // 2) si aucun serveur actif selon WGSM
     if (activeIds.length === 0) {
         lastSelectedServerId = null;
         lastSelectedServerWasActive = false;
@@ -291,10 +291,10 @@ function syncSelectedServerFromStatusData(statusData) {
         return;
     }
 
-    // 3) if the user already has a valid selection
+    // 3) si l'utilisateur a déjà une sélection valide
     if (hasValidSelected) {
-        // if the selected server has actually just switched to STOPPED,
-        // We switch to the first asset
+        // si le serveur sélectionné vient réellement de passer STOPPED,
+        // on bascule vers le premier actif
         if (currentStatus === 'STOPPED' && lastSelectedServerWasActive) {
             lastSelectedServerId = activeIds[0];
             lastSelectedServerWasActive = true;
@@ -302,13 +302,13 @@ function syncSelectedServerFromStatusData(statusData) {
             return;
         }
 
-        // otherwise we ALWAYS keep the manual selection
+        // sinon on garde TOUJOURS la sélection manuelle
         lastSelectedServerWasActive = currentIsActive;
         logDebug('KEEP SELECTED SERVER ->', currentSelected, '| status =', currentStatus);
         return;
     }
 
-    // 4) No valid selection -> take the first asset
+    // 4) aucune sélection valable -> prendre le premier actif
     lastSelectedServerId = activeIds[0];
     lastSelectedServerWasActive = true;
     logDebug('NO VALID SELECTED -> sync to', lastSelectedServerId);
@@ -321,7 +321,7 @@ function schedulePendingDelete(type, key, delayMs = FALLBACK_DELETE_DELAY_MS) {
 }
 function scheduleStopAllDelete(delayMs = FALLBACK_DELETE_DELAY_MS) {
     setTimeout(async () => {
-       await deleteAndClearPending('stopall');
+        await deleteAndClearPending('stopall');
     }, delayMs);
 }
 function getSelectedStatus() {
@@ -350,7 +350,7 @@ async function handleWgsmEmptyList(channel = null) {
     await deleteAndClearPending('list');
     await deleteAndClearPending('stats');
 
-    syncSelectedServerFromStatusData(readStatusFile());
+    syncSelectedServerFromStatusData(readStatusFileFresh());
     requestMenuRefresh(lastSelectedServerId);
 
     if (pendingPowerAction) {
@@ -359,21 +359,9 @@ async function handleWgsmEmptyList(channel = null) {
         });
     }
 }
-function ensureServerEntry(data, id) {
-    if (!data[id] || typeof data[id] !== 'object' || Array.isArray(data[id])) {
-        data[id] = {
-            status: 'STOPPED',
-            name: '',
-            ip: '',
-            pass: '',
-            update: 'UPDATE'
-        };
-    }
 
-    return data[id];
-}
 function hasAnyStartedServer() {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
 
     return Object.entries(data)
         .filter(([key]) => key !== '_meta')
@@ -450,25 +438,32 @@ function writeStatusFile(data) {
 }
 
 function getStatus(id) {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
     return getStatusValue(data[id]);
 }
 
 function saveStatus(id, status) {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
+    id = String(id);
 
-    const entry = ensureServerEntry(data, id);
-    entry.status = status;
+    if (!data[id] || typeof data[id] !== 'object') {
+        logError(`Serveur ${id} introuvable -> status non modifié`);
+        return;
+    }
+
+    data[id].status = status;
+
     writeStatusFile(data);
     logDebug('SAVE STATUS', 'id =', id, 'status =', status);
 }
 
 function setAllStatusesStopped() {
-    const servers = getServers();
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
 
-    for (const srv of servers) {
-        const entry = ensureServerEntry(data, srv.id);
+    for (const [id, entry] of Object.entries(data)) {
+        if (id.startsWith('_')) continue;
+        if (!entry || typeof entry !== 'object') continue;
+
         entry.status = 'STOPPED';
     }
 
@@ -477,26 +472,38 @@ function setAllStatusesStopped() {
 }
 
 function setStatusesFromStartedIds(startedIds) {
-    const servers = getServers();
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
     const startedSet = new Set(startedIds.map(String));
 
-    for (const srv of servers) {
-        const entry = ensureServerEntry(data, srv.id);
-        entry.status = startedSet.has(String(srv.id)) ? 'STARTED' : 'STOPPED';
+    for (const [id, entry] of Object.entries(data)) {
+        if (id.startsWith('_')) continue;
+        if (!entry || typeof entry !== 'object') continue;
+
+        entry.status = startedSet.has(String(id)) ? 'STARTED' : 'STOPPED';
     }
 
     writeStatusFile(data);
     logDebug('SET STATUSES FROM STARTED IDS', [...startedSet]);
 }
 
+function readStatusFileFresh() {
+    if (!fs.existsSync(STATUS_FILE)) return {};
+
+    try {
+        return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
+    } catch (err) {
+        logError('Erreur lecture status_name_ip.json :', err);
+        return {};
+    }
+}
+
 function getStatusMessageId(key) {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
     return data?._meta?.messages?.[key] || null;
 }
 
 function setStatusMessageId(key, messageId) {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
 
     if (!data._meta || typeof data._meta !== 'object') data._meta = {};
     if (!data._meta.messages || typeof data._meta.messages !== 'object') {
@@ -509,7 +516,7 @@ function setStatusMessageId(key, messageId) {
 }
 
 function removeStatusMessageId(key) {
-    const data = readStatusFile();
+    const data = readStatusFileFresh();
 
     if (data?._meta?.messages?.[key]) {
         delete data._meta.messages[key];
@@ -525,7 +532,7 @@ async function upsertStatusMessage(channel, key, text) {
     try {
         const savedMessageId = getStatusMessageId(key);
 
-        // ✅ Skip if same text
+        // ✅ skip si même texte
         if (lastStatusTextByKey[key] === text) {
             logDebug('UPSERT STATUS MESSAGE SKIP SAME TEXT', key);
             return null;
@@ -539,7 +546,7 @@ async function upsertStatusMessage(channel, key, text) {
                 if (oldMsg) {
                     await oldMsg.edit({ content: text }).catch(() => { });
 
-                    // ✅ after successful EDIT
+                    // ✅ après EDIT réussi
                     lastStatusTextByKey[key] = text;
 
                     logDebug('UPSERT EDIT OK', key, oldMsg.id);
@@ -556,7 +563,7 @@ async function upsertStatusMessage(channel, key, text) {
         if (newMsg) {
             setStatusMessageId(key, newMsg.id);
 
-            // ✅ after successful SEND
+            // ✅ après SEND réussi
             lastStatusTextByKey[key] = text;
 
             logDebug('UPSERT SEND OK', key, newMsg.id);
@@ -603,7 +610,7 @@ function buildInterface(selectedId = null) {
     if (availableServers.length > 0) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId('select_server')
-            .setPlaceholder('Choose a server')
+            .setPlaceholder('Choisir un serveur')
             .addOptions(
                 availableServers.map(s => ({
                     label: s.name,
@@ -673,7 +680,7 @@ function buildInterface(selectedId = null) {
             actionLock === 'stop';
 
         const disableStop =
-            isPowerActionRunning ||        
+            isPowerActionRunning ||
             status === 'STOPPED' ||
             actionLock === 'start' ||
             actionLock === 'stop';
@@ -793,7 +800,7 @@ async function updateMenuStatus(serverId = null) {
         const components = buildInterface(selected);
 
         const signature = JSON.stringify({
-            content: 'Server Menu',
+            content: 'Serveur Menu',
             selected,
             components: components.map(row => ({
                 components: row.components.map(c => ({
@@ -823,7 +830,7 @@ async function updateMenuStatus(serverId = null) {
         }
 
         await menuMessage.edit({
-            content: 'Server Menu',
+            content: 'Serveur Menu',
             components
         }).catch(err => {
             logDebug('UPDATE MENU STATUS EDIT FAIL', err?.message || err);
@@ -896,7 +903,7 @@ async function executePendingPowerAction() {
             await upsertStatusMessage(
                 channel,
                 'live_status',
-                `${action.summaryText} | ${action.type === 'shutdown' ? 'stop' : 'restart'} in 4 min`
+                `${action.summaryText} | ${action.type === 'shutdown' ? 'arrêt' : 'redémarrage'} dans 4 min`
             );
         }
 
@@ -954,7 +961,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
 
     try {
         await interaction.message.edit({
-            content: 'Server Menu',
+            content: 'Serveur Menu',
             components: buildInterface(lastSelectedServerId)
         });
     } catch (err) {
@@ -964,7 +971,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
     await upsertStatusMessage(
         interaction.channel,
         'live_status',
-        `⏳ ${targetAction.toUpperCase()} in progress...`
+        `⏳ ${targetAction.toUpperCase()} en cours...`
     );
 
     const wgsmStartedIds = await getLatestStartedIdsFromWgsm(interaction.channel);
@@ -1014,11 +1021,11 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED`
+            `${rconResult.summary} | ${targetAction.toUpperCase()} ANNULÉ`
         );
 
         await interaction.message.edit({
-            content: 'Server Menu',
+            content: 'Serveur Menu',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after canceled power action :', err);
@@ -1034,7 +1041,7 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         summaryText: rconResult.summary
     };
 
-    // ✅ If all servers are offline, we do not depend on WGSM stopall
+    // ✅ SI AUCUN SERVEUR ACTIF, on ne dépend pas de WGSM stopall
     if (wgsmStartedIds.length === 0) {
         logDebug('POWER ACTION NO STARTED SERVER -> EXECUTE DIRECTLY', targetAction);
         await executePendingPowerAction();
@@ -1064,11 +1071,11 @@ async function handleConfirmedPowerAction(interaction, targetAction) {
         await upsertStatusMessage(
             interaction.channel,
             'live_status',
-            `${rconResult.summary} | ${targetAction.toUpperCase()} CANCELED (stopall not sent)`
+            `${rconResult.summary} | ${targetAction.toUpperCase()} ANNULÉ (stopall non envoyé)`
         );
 
         await interaction.message.edit({
-            content: 'Server Menu',
+            content: 'Serveur Menu',
             components: buildInterface(lastSelectedServerId)
         }).catch(err => {
             logError('Erreur restore menu after stopall send fail :', err);
@@ -1439,7 +1446,7 @@ function isStatsMessage(content) {
 
 function isEmptyListMessage(content) {
     if (!content) return false;
-    return content.replace(/\r/g, '').trim().toLowerCase().includes('all server offline.');
+    return content.replace(/\r/g, '').trim().toLowerCase().includes('aucun serveur actif.');
 }
 
 async function getLatestStartedIdsFromWgsm(channel) {
@@ -1563,7 +1570,7 @@ async function handleWgsmStatusMessage(message) {
                 }
             }
 
-            const statusDataAfterList = readStatusFile();
+            const statusDataAfterList = readStatusFileFresh();
             syncSelectedServerFromStatusData(statusDataAfterList);
 
             const hasTerminalStatus = parsedStatuses.some(
@@ -1576,7 +1583,7 @@ async function handleWgsmStatusMessage(message) {
             return;
         }
 
-        const statusData = readStatusFile();
+        const statusData = readStatusFileFresh();
         let changed = false;
 
         for (const item of parsedStatuses) {
@@ -1585,7 +1592,12 @@ async function handleWgsmStatusMessage(message) {
 
             logDebug('WGSM STATUS PARSED', 'id =', id, 'status =', status, 'current =', current);
 
-            const entry = ensureServerEntry(statusData, id);
+            const entry = statusData[id];
+
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                logError(`WGSM status ignoré: serveur ${id} introuvable`);
+                continue;
+            }
 
             if ((status === 'STARTED' || status === 'STOPPED') && current !== status) {
                 entry.status = status;
@@ -1693,7 +1705,7 @@ async function bootstrapFromRecentWgsmMessages() {
 
                 setStatusesFromStartedIds(startedIds);
 
-                const statusData = readStatusFile();
+                const statusData = readStatusFileFresh();
                 syncSelectedServerFromStatusData(statusData);
                 requestMenuRefresh(lastSelectedServerId);
 
@@ -1737,8 +1749,8 @@ client.on('messageCreate', async message => {
                 'content =', message.content
             );
         }
-        // Deletes !wgsm commands sent by other users
-        // but does not touch your bot's messages or the WGSM bot itself.
+        // Supprime les commandes !wgsm envoyées par les autres utilisateurs
+        // mais ne touche pas aux messages de ton bot ni au bot WGSM.
         if (
             message.channel?.id === BOT_CHANNEL_ID &&
             isRawWgsmCommand(message.content) &&
@@ -1758,7 +1770,7 @@ client.on('messageCreate', async message => {
                 } catch (_) { }
             }, 5000);
             return;
-        }        
+        }
 
         await handleWgsmStatusMessage(message);
     } catch (err) {
@@ -1838,45 +1850,45 @@ function canUsePowerButtons(userId) {
 client.on('interactionCreate', async interaction => {
     try {
         logDebug('INTERACTION', 'type =', interaction.type, 'customId =', interaction.customId || 'slash');
-                logDebug(
-                    'ACCESS CHECK',
-                    'user =', interaction.user.id,
-                    'blacklist =', getConfigIdList('menu_blacklist'),
-                    'isBlacklisted =', isUserBlacklisted(interaction.user.id),
-                    'menuWhitelist =', getConfigIdList('menu_whitelist'),
-                    'powerWhitelist =', getConfigIdList('power_whitelist')
-                );
-        
-                if (isUserBlacklisted(interaction.user.id)) {
-                    if (interaction.isRepliable()) {
-                        await interaction.reply({
-                            content: '❌ Accès refusé.',
-                            flags: MessageFlags.Ephemeral
-                        }).catch(() => { });
-                    }
-                    return;
-                }
+        logDebug(
+            'ACCESS CHECK',
+            'user =', interaction.user.id,
+            'blacklist =', getConfigIdList('menu_blacklist'),
+            'isBlacklisted =', isUserBlacklisted(interaction.user.id),
+            'menuWhitelist =', getConfigIdList('menu_whitelist'),
+            'powerWhitelist =', getConfigIdList('power_whitelist')
+        );
+
+        if (isUserBlacklisted(interaction.user.id)) {
+            if (interaction.isRepliable()) {
+                await interaction.reply({
+                    content: '❌ Accès refusé.',
+                    flags: MessageFlags.Ephemeral
+                }).catch(() => { });
+            }
+            return;
+        }
 
         if (interaction.isChatInputCommand() && interaction.commandName === 'server') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const channel = await client.channels.fetch(BOT_CHANNEL_ID).catch(() => null);
             if (!channel || !channel.isTextBased()) {
-                return interaction.editReply({ content: '❌ Channel not found.' }).catch(() => { });
+                return interaction.editReply({ content: '❌ Canal introuvable.' }).catch(() => { });
             }
 
-            const statusData = readStatusFile();
+            const statusData = readStatusFileFresh();
             syncSelectedServerFromStatusData(statusData);
 
             const savedMenuId = getStatusMessageId('main_menu');
             let menuMessage = null;
 
-            // 1. Try directly with ID
+            // 1. Essayez directement avec l'identifiant
             if (savedMenuId) {
                 menuMessage = await channel.messages.fetch(savedMenuId).catch(() => null);
             }
 
-            // 2. Fallback if not found
+            // 2. Solution de repli si introuvable            
             if (!menuMessage) {
                 menuMessage = await findMainMenuMessage(channel);
 
@@ -1885,13 +1897,13 @@ client.on('interactionCreate', async interaction => {
                 }
             }
 
-            // 3. If found → refresh
+            // 3. Si trouvé → actualiser            
             if (menuMessage) {
                 requestMenuRefresh(lastSelectedServerId);
             } else {
-                // 4. otherwise create
+                // 4. sinon créer
                 const msg = await channel.send({
-                    content: 'Server Menu',
+                    content: 'Serveur Menu',
                     components: buildInterface(lastSelectedServerId)
                 }).catch(err => {
                     logError('Erreur create menu /server :', err);
@@ -1947,7 +1959,7 @@ client.on('interactionCreate', async interaction => {
                 flags: MessageFlags.Ephemeral
             }).catch(() => { });
             return;
-        }        
+        }
 
         const ok = await safeDeferUpdate(interaction);
         if (!ok) return;
@@ -1961,9 +1973,9 @@ client.on('interactionCreate', async interaction => {
         logDebug('BUTTON CLICK', 'action =', action, 'id =', id);
 
         if (id && action !== 'confirm' && action !== 'cancel') {
-            // Never change the user selection simply because a button was clicked.
-            // The selection should only change via the menu select_server
-            // or if the selected server actually becomes STOPPED / no longer exists / all servers are offline.
+            //Ne modifiez jamais la sélection de l'utilisateur simplement parce qu'un bouton a été cliqué.
+            //La sélection ne doit être modifiée que via le menu select_server.
+            //Ou si le serveur sélectionné est arrêté, n'existe plus ou si tous les serveurs sont hors ligne.
             logDebug('KEEP USER SELECTION ON BUTTON', 'clickedId =', id, 'selected =', lastSelectedServerId);
         }
 
@@ -2035,7 +2047,7 @@ client.on('interactionCreate', async interaction => {
             isPowerActionRunning = false;
 
             await interaction.message.edit({
-                content: 'Server Menu',
+                content: 'Serveur Menu',
                 components: buildInterface(lastSelectedServerId)
             }).catch(err => {
                 logError('Erreur cancel edit :', err);
@@ -2186,7 +2198,7 @@ client.on('interactionCreate', async interaction => {
                             await upsertStatusMessage(
                                 interaction.channel,
                                 'live_status',
-                                `${rconResult.summary} | STOP ${id} CANCELED`
+                                `${rconResult.summary} | STOP ${id} ANNULÉ`
                             );
                             return;
                         }
@@ -2248,7 +2260,7 @@ client.on('interactionCreate', async interaction => {
                 await upsertStatusMessage(
                     interaction.channel,
                     'live_status',
-                    srv.ip || 'empty IP'
+                    srv.ip || 'Aucun IP'
                 );
                 break;
             }
@@ -2257,7 +2269,7 @@ client.on('interactionCreate', async interaction => {
                 await upsertStatusMessage(
                     interaction.channel,
                     'live_status',
-                    srv.pass || 'empty PASS'
+                    srv.pass || 'Aucun PASS'
                 );
                 break;
             }
